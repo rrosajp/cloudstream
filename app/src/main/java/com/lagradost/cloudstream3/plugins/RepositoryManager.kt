@@ -73,7 +73,7 @@ object RepositoryManager {
     val PREBUILT_REPOSITORIES: Array<RepositoryData> by lazy {
         getKey("PREBUILT_REPOSITORIES") ?: emptyArray()
     }
-    val GH_REGEX = Regex("^https://raw.githubusercontent.com/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)/(.*)$")
+    private val GH_REGEX = Regex("^https://raw.githubusercontent.com/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)/(.*)$")
 
     /* Convert raw.githubusercontent.com urls to cdn.jsdelivr.net if enabled in settings */
     fun convertRawGitUrl(url: String): String {
@@ -95,15 +95,11 @@ object RepositoryManager {
             }
         } else if (fixedUrl.matches("^[a-zA-Z0-9!_-]+$".toRegex())) {
             suspendSafeApiCall {
-                app.get("https://l.cloudstream.cf/${fixedUrl}", allowRedirects = false).let {
-                    it.headers["Location"]?.let { url ->
-                        return@suspendSafeApiCall if (!url.startsWith("https://cutt.ly/branded-domains")) url
-                        else null
-                    }
-                    app.get("https://cutt.ly/${fixedUrl}", allowRedirects = false).let { it2 ->
-                        it2.headers["Location"]?.let { url ->
-                            return@suspendSafeApiCall if (url.startsWith("https://cutt.ly/404")) url else null
-                        }
+                app.get("https://cutt.ly/${fixedUrl}", allowRedirects = false).let { it2 ->
+                    it2.headers["Location"]?.let { url ->
+                        if (url.startsWith("https://cutt.ly/404")) return@suspendSafeApiCall null
+                        if (url.removeSuffix("/") == "https://cutt.ly") return@suspendSafeApiCall null
+                        return@suspendSafeApiCall url
                     }
                 }
             }

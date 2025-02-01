@@ -54,6 +54,7 @@ open class TmdbProvider : MainAPI() {
     }
 
     private fun BaseTvShow.toSearchResponse(): TvSeriesSearchResponse {
+        @Suppress("DEPRECATION")
         return TvSeriesSearchResponse(
             this.name ?: this.original_name,
             getUrl(id, true),
@@ -71,6 +72,7 @@ open class TmdbProvider : MainAPI() {
     }
 
     private fun BaseMovie.toSearchResponse(): MovieSearchResponse {
+        @Suppress("DEPRECATION")
         return MovieSearchResponse(
             this.title ?: this.original_title,
             getUrl(id, false),
@@ -99,12 +101,14 @@ open class TmdbProvider : MainAPI() {
         val episodes = this.seasons?.filter { !disableSeasonZero || (it.season_number ?: 0) != 0 }
             ?.mapNotNull { season ->
                 season.episodes?.map { episode ->
+                    @Suppress("DEPRECATION")
                     Episode(
                         TmdbLink(
                             episode.external_ids?.imdb_id ?: this.external_ids?.imdb_id,
                             this.id,
                             episode.episode_number,
                             episode.season_number,
+                            this.name ?: this.original_name,
                         ).toJson(),
                         episode.name,
                         episode.season_number,
@@ -115,6 +119,7 @@ open class TmdbProvider : MainAPI() {
                         episode.air_date?.time,
                     )
                 } ?: (1..(season.episode_count ?: 1)).map { episodeNum ->
+                    @Suppress("DEPRECATION")
                     Episode(
                         episode = episodeNum,
                         data = TmdbLink(
@@ -122,6 +127,7 @@ open class TmdbProvider : MainAPI() {
                             this.id,
                             episodeNum,
                             season.season_number,
+                            this.name ?: this.original_name,
                         ).toJson(),
                         season = season.season_number
                     )
@@ -151,6 +157,8 @@ open class TmdbProvider : MainAPI() {
             recommendations = (this@toLoadResponse.recommendations
                 ?: this@toLoadResponse.similar)?.results?.map { it.toSearchResponse() }
             addActors(credits?.cast?.toList().toActors())
+
+            contentRating = fetchContentRating(id, "US")
         }
     }
 
@@ -193,6 +201,8 @@ open class TmdbProvider : MainAPI() {
             recommendations = (this@toLoadResponse.recommendations
                 ?: this@toLoadResponse.similar)?.results?.map { it.toSearchResponse() }
             addActors(credits?.cast?.toList().toActors())
+
+            contentRating = fetchContentRating(id, "US")
         }
     }
 
@@ -236,6 +246,7 @@ open class TmdbProvider : MainAPI() {
             }
         )
 
+        @Suppress("DEPRECATION")
         return HomePageResponse(
             listOf(
 //                HomePageList("Popular Series", popularSeries),
@@ -262,6 +273,26 @@ open class TmdbProvider : MainAPI() {
 
     open fun loadFromTmdb(tmdb: Int): LoadResponse? {
         return null
+    }
+
+    open suspend fun fetchContentRating(id: Int?, country: String): String? {
+        id ?: return null
+
+        val contentRatings = tmdb.tvService().content_ratings(id).awaitResponse().body()?.results
+        return if (!contentRatings.isNullOrEmpty()) {
+            contentRatings.firstOrNull { it: ContentRating ->
+                it.iso_3166_1 == country
+            }?.rating
+        } else {
+            val releaseDates = tmdb.moviesService().releaseDates(id).awaitResponse().body()?.results
+            val certification = releaseDates?.firstOrNull { it: ReleaseDatesResult ->
+                it.iso_3166_1 == country
+            }?.release_dates?.firstOrNull { it: ReleaseDate ->
+                !it.certification.isNullOrBlank()
+            }?.certification
+
+            certification
+        }
     }
 
     // Possible to add recommendations and such here.

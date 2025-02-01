@@ -5,54 +5,68 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AppOpsManager
 import android.app.Dialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.content.res.Resources
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
-import android.view.*
+import android.os.Handler
+import android.os.Looper
+import android.os.TransactionTooLargeException
+import android.util.Log
+import android.view.Gravity
+import android.view.MenuItem
+import android.view.View
+import android.view.ViewGroup
+import android.view.ViewGroup.MarginLayoutParams
+import android.view.WindowInsets
+import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
-import android.widget.ImageView
 import android.widget.ListAdapter
 import android.widget.ListView
+import android.widget.Toast.LENGTH_LONG
 import androidx.annotation.AttrRes
 import androidx.annotation.ColorInt
-import androidx.annotation.DrawableRes
 import androidx.annotation.IdRes
+import androidx.annotation.StyleRes
 import androidx.appcompat.view.ContextThemeWrapper
 import androidx.appcompat.view.menu.MenuBuilder
 import androidx.appcompat.widget.PopupMenu
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.getSystemService
 import androidx.core.graphics.alpha
 import androidx.core.graphics.blue
-import androidx.core.graphics.drawable.toBitmapOrNull
 import androidx.core.graphics.green
 import androidx.core.graphics.red
+import androidx.core.view.marginBottom
+import androidx.core.view.marginLeft
+import androidx.core.view.marginRight
+import androidx.core.view.marginTop
+import androidx.core.view.updateLayoutParams
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
 import androidx.navigation.fragment.NavHostFragment
 import androidx.palette.graphics.Palette
 import androidx.preference.PreferenceManager
-import com.bumptech.glide.load.DataSource
-import com.bumptech.glide.load.engine.DiskCacheStrategy
-import com.bumptech.glide.load.engine.GlideException
-import com.bumptech.glide.load.model.GlideUrl
-import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions
-import com.bumptech.glide.request.RequestListener
-import com.bumptech.glide.request.target.Target
+import com.google.android.material.appbar.AppBarLayout
+import com.google.android.material.chip.Chip
+import com.google.android.material.chip.ChipDrawable
+import com.google.android.material.chip.ChipGroup
+import com.lagradost.cloudstream3.AcraApplication.Companion.context
+import com.lagradost.cloudstream3.CommonActivity.activity
+import com.lagradost.cloudstream3.CommonActivity.showToast
 import com.lagradost.cloudstream3.R
 import com.lagradost.cloudstream3.mvvm.logError
-import com.lagradost.cloudstream3.ui.settings.SettingsFragment.Companion.isEmulatorSettings
-import com.lagradost.cloudstream3.ui.settings.SettingsFragment.Companion.isTvSettings
-import com.lagradost.cloudstream3.utils.GlideOptions.bitmapTransform
-import jp.wasabeef.glide.transformations.BlurTransformation
+import com.lagradost.cloudstream3.ui.settings.Globals
+import com.lagradost.cloudstream3.ui.settings.Globals.EMULATOR
+import com.lagradost.cloudstream3.ui.settings.Globals.isLayout
 import kotlin.math.roundToInt
-
 
 object UIHelper {
     val Int.toPx: Int get() = (this * Resources.getSystem().displayMetrics.density).toInt()
@@ -60,7 +74,7 @@ object UIHelper {
     val Int.toDp: Int get() = (this / Resources.getSystem().displayMetrics.density).toInt()
     val Float.toDp: Float get() = (this / Resources.getSystem().displayMetrics.density)
 
-    fun Activity.checkWrite(): Boolean {
+    fun Context.checkWrite(): Boolean {
         return (ContextCompat.checkSelfPermission(
             this,
             Manifest.permission.WRITE_EXTERNAL_STORAGE
@@ -69,6 +83,31 @@ object UIHelper {
                 // Since Android 13, we can't request external storage permission,
                 // so don't check it.
                 || Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+    }
+
+    fun populateChips(view: ChipGroup?, tags: List<String>, @StyleRes style : Int = R.style.ChipFilled) {
+        if (view == null) return
+        view.removeAllViews()
+        val context = view.context ?: return
+        val maxTags = tags.take(10) // Limited because they are too much
+
+        maxTags.forEach { tag ->
+            val chip = Chip(context)
+            val chipDrawable = ChipDrawable.createFromAttributes(
+                context,
+                null,
+                0,
+                style
+            )
+            chip.setChipDrawable(chipDrawable)
+            chip.text = tag
+            chip.isChecked = false
+            chip.isCheckable = false
+            chip.isFocusable = false
+            chip.isClickable = false
+            chip.setTextColor(context.colorFromAttribute(R.attr.white))
+            view.addView(chip)
+        }
     }
 
     fun Activity.requestRW() {
@@ -83,6 +122,35 @@ object UIHelper {
         )
     }
 
+    fun clipboardHelper(label: UiText, text: CharSequence) {
+        val ctx = context ?: return
+        try {
+            ctx.let {
+                val clip = ClipData.newPlainText(label.asString(ctx), text)
+                val labelSuffix = txt(R.string.toast_copied).asString(ctx)
+                ctx.getSystemService<ClipboardManager>()?.setPrimaryClip(clip)
+
+                if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) {
+                    showToast("${label.asString(ctx)} $labelSuffix")
+                }
+            }
+        } catch (t: Throwable) {
+            Log.e("ClipboardService", "$t")
+            when (t) {
+                is SecurityException -> {
+                    showToast(R.string.clipboard_permission_error)
+                }
+
+                is TransactionTooLargeException -> {
+                    showToast(R.string.clipboard_too_large)
+                }
+
+                else -> {
+                    showToast(R.string.clipboard_unknown_error, LENGTH_LONG)
+                }
+            }
+        }
+    }
 
     /**
      * Sets ListView height dynamically based on the height of the items.
@@ -133,6 +201,14 @@ object UIHelper {
         }
     }
 
+    fun View?.setAppBarNoScrollFlagsOnTV() {
+        if (isLayout(Globals.TV or EMULATOR)) {
+            this?.updateLayoutParams<AppBarLayout.LayoutParams> {
+                scrollFlags = AppBarLayout.LayoutParams.SCROLL_FLAG_NO_SCROLL
+            }
+        }
+    }
+
     fun Activity.hideKeyboard() {
         window?.decorView?.clearFocus()
         this.findViewById<View>(android.R.id.content)?.rootView?.let {
@@ -143,9 +219,8 @@ object UIHelper {
     fun Activity?.navigate(@IdRes navigation: Int, arguments: Bundle? = null) {
         try {
             if (this is FragmentActivity) {
-                (supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment?)?.navController?.navigate(
-                    navigation, arguments
-                )
+                val navHostFragment = supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as? NavHostFragment?
+                navHostFragment?.navController?.navigate(navigation, arguments)
             }
         } catch (t: Throwable) {
             logError(t)
@@ -180,89 +255,6 @@ object UIHelper {
         }
     }
 
-    fun ImageView?.setImage(
-        url: String?,
-        headers: Map<String, String>? = null,
-        @DrawableRes
-        errorImageDrawable: Int? = null,
-        fadeIn: Boolean = true,
-        colorCallback: ((Palette) -> Unit)? = null
-    ): Boolean {
-        if (this == null || url.isNullOrBlank()) return false
-
-        return try {
-            val builder = GlideApp.with(this)
-                .load(GlideUrl(url) { headers ?: emptyMap() })
-                .skipMemoryCache(true)
-                .diskCacheStrategy(DiskCacheStrategy.ALL).let { req ->
-                    if (fadeIn)
-                        req.transition(DrawableTransitionOptions.withCrossFade())
-                    else req
-                }
-
-            if (colorCallback != null) {
-                builder.listener(object : RequestListener<Drawable> {
-                    @SuppressLint("CheckResult")
-                    override fun onResourceReady(
-                        resource: Drawable?,
-                        model: Any?,
-                        target: Target<Drawable>?,
-                        dataSource: DataSource?,
-                        isFirstResource: Boolean
-                    ): Boolean {
-                        resource?.toBitmapOrNull()
-                            ?.let { bitmap -> createPaletteAsync(url, bitmap, colorCallback) }
-                        return false
-                    }
-
-                    @SuppressLint("CheckResult")
-                    override fun onLoadFailed(
-                        e: GlideException?,
-                        model: Any?,
-                        target: Target<Drawable>?,
-                        isFirstResource: Boolean
-                    ): Boolean {
-                        return false
-                    }
-                })
-            }
-
-            val res = if (errorImageDrawable != null)
-                builder.error(errorImageDrawable).into(this)
-            else
-                builder.into(this)
-            res.clearOnDetach()
-
-            true
-        } catch (e: Exception) {
-            logError(e)
-            false
-        }
-    }
-
-    fun ImageView?.setImageBlur(
-        url: String?,
-        radius: Int,
-        sample: Int = 3,
-        headers: Map<String, String>? = null
-    ) {
-        if (this == null || url.isNullOrBlank()) return
-        try {
-            val res = GlideApp.with(this)
-                .load(GlideUrl(url) { headers ?: emptyMap() })
-                .apply(bitmapTransform(BlurTransformation(radius, sample)))
-                .transition(
-                    DrawableTransitionOptions.withCrossFade()
-                )
-                .skipMemoryCache(true)
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .into(this)
-            res.clearOnDetach()
-        } catch (e: Exception) {
-            logError(e)
-        }
-    }
-
     fun adjustAlpha(@ColorInt color: Int, factor: Float): Int {
         val alpha = (Color.alpha(color) * factor).roundToInt()
         val red = Color.red(color)
@@ -282,84 +274,53 @@ object UIHelper {
         // Enables regular immersive mode.
         // For "lean back" mode, remove SYSTEM_UI_FLAG_IMMERSIVE.
         // Or for "sticky immersive," replace it with SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-        window.decorView.systemUiVisibility = (
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                        // Set the content to appear under the system bars so that the
-                        // content doesn't resize when the system bars hide and show.
-                        or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                        or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                        or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                        // Hide the nav bar and status bar
-                        or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                        or View.SYSTEM_UI_FLAG_FULLSCREEN
-                //  or View.SYSTEM_UI_FLAG_LOW_PROFILE
-                )
-        // window.addFlags(View.KEEP_SCREEN_ON)
-    }
+        /** BUGGED AF  **/
+        /*if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
 
-    fun FragmentActivity.popCurrentPage() {
-        this.onBackPressed()
-        /*val currentFragment = supportFragmentManager.fragments.lastOrNull {
-            it.isVisible
-        } ?: return
-
-        supportFragmentManager.beginTransaction()
-            .setCustomAnimations(
-                R.anim.enter_anim,
-                R.anim.exit_anim,
-                R.anim.pop_enter,
-                R.anim.pop_exit
-            )
-            .remove(currentFragment)
-            .commitAllowingStateLoss()*/
-    }
-    /*
-    fun FragmentActivity.popCurrentPage(isInPlayer: Boolean, isInExpandedView: Boolean, isInResults: Boolean) {
-        val currentFragment = supportFragmentManager.fragments.lastOrNull {
-            it.isVisible
-        }
-            ?: //this.onBackPressed()
-            return
-
-/*
-        if (tvActivity == null) {
-            requestedOrientation = if (settingsManager?.getBoolean("force_landscape", false) == true) {
-                ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
-            } else {
-                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            WindowInsetsControllerCompat(window, View(this)).let { controller ->
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+                controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
         }*/
 
-        // No fucked animations leaving the player :)
-        when {
-            isInPlayer -> {
-                supportFragmentManager.beginTransaction()
-                    //.setCustomAnimations(R.anim.enter, R.anim.exit, R.anim.pop_enter, R.anim.pop_exit)
-                    .remove(currentFragment)
-                    .commitAllowingStateLoss()
-            }
-            isInExpandedView && !isInResults -> {
-                supportFragmentManager.beginTransaction()
-                    .setCustomAnimations(
-                        R.anim.enter_anim,//R.anim.enter_from_right,
-                        R.anim.exit_anim,//R.anim.exit_to_right,
-                        R.anim.pop_enter,
-                        R.anim.pop_exit
-                    )
-                    .remove(currentFragment)
-                    .commitAllowingStateLoss()
-            }
-            else -> {
-                supportFragmentManager.beginTransaction()
-                    .setCustomAnimations(R.anim.enter_anim, R.anim.exit_anim, R.anim.pop_enter, R.anim.pop_exit)
-                    .remove(currentFragment)
-                    .commitAllowingStateLoss()
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                            // Set the content to appear under the system bars so that the
+                            // content doesn't resize when the system bars hide and show.
+                            or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                            // Hide the nav bar and status bar
+                            or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            or View.SYSTEM_UI_FLAG_FULLSCREEN
+                    ) // FIXME this should be replaced
+          //}
+    }
+
+    fun FragmentActivity.popCurrentPage() {
+        // Post the back press action to the main thread handler to ensure it executes
+        // after any currently pending UI updates or fragment transactions.
+        Handler(Looper.getMainLooper()).post {
+            // Check if the FragmentManager state is saved. If it is, we cannot perform
+            // fragment transactions safely because the state may be inconsistent.
+            if (!supportFragmentManager.isStateSaved) {
+                // If the state is not saved, it's safe to perform the back press action.
+                this.onBackPressedDispatcher.onBackPressed()
+            } else {
+                // If the state is saved, retry the back press action after a slight delay.
+                // This gives the FragmentManager time to complete any ongoing state-saving
+                // operations or transactions, ensuring that we do not encounter an IllegalStateException.
+                Handler(Looper.getMainLooper()).postDelayed({
+                    this.onBackPressedDispatcher.onBackPressed()
+                }, 100)
             }
         }
-    }*/
+    }
 
     fun Context.getStatusBarHeight(): Int {
-        if (isTvSettings()) {
+        if (isLayout(Globals.TV or EMULATOR)) {
             return 0
         }
 
@@ -371,21 +332,38 @@ object UIHelper {
         return result
     }
 
-    fun Context?.fixPaddingStatusbar(v: View?) {
-        if (v == null || this == null) return
+    fun fixPaddingStatusbar(v: View?) {
+        if (v == null) return
+        val ctx = v.context ?: return
         v.setPadding(
             v.paddingLeft,
-            v.paddingTop + getStatusBarHeight(),
+            v.paddingTop + ctx.getStatusBarHeight(),
             v.paddingRight,
             v.paddingBottom
         )
     }
 
-    fun Context.fixPaddingStatusbarView(v: View?) {
+    fun fixPaddingStatusbarMargin(v: View?) {
         if (v == null) return
+        val ctx = v.context ?: return
 
+        v.layoutParams = v.layoutParams.apply {
+            if (this is MarginLayoutParams) {
+                setMargins(
+                    v.marginLeft,
+                    v.marginTop + ctx.getStatusBarHeight(),
+                    v.marginRight,
+                    v.marginBottom
+                )
+            }
+        }
+    }
+
+    fun fixPaddingStatusbarView(v: View?) {
+        if (v == null) return
+        val ctx = v.context ?: return
         val params = v.layoutParams
-        params.height = getStatusBarHeight()
+        params.height = ctx.getStatusBarHeight()
         v.layoutParams = params
     }
 
@@ -398,7 +376,7 @@ object UIHelper {
         return result
     }
 
-    fun Context?.IsBottomLayout(): Boolean {
+    fun Context?.isBottomLayout(): Boolean {
         if (this == null) return true
         val settingsManager = PreferenceManager.getDefaultSharedPreferences(this)
         return settingsManager.getBoolean(getString(R.string.bottom_title_key), true)
@@ -406,13 +384,26 @@ object UIHelper {
 
     fun Activity.changeStatusBarState(hide: Boolean): Int {
         return if (hide) {
-            window?.setFlags(
-                WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                WindowManager.LayoutParams.FLAG_FULLSCREEN
-            )
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                window.insetsController?.hide(WindowInsets.Type.statusBars())
+
+            } else {
+                @Suppress("DEPRECATION")
+                window.setFlags(
+                    WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                    WindowManager.LayoutParams.FLAG_FULLSCREEN
+                )
+            }
             0
         } else {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                window.insetsController?.show(WindowInsets.Type.statusBars())
+            } else {
+                @Suppress("DEPRECATION")
+                window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            }
+
             this.getStatusBarHeight()
         }
     }
@@ -420,13 +411,19 @@ object UIHelper {
     // Shows the system bars by removing all the flags
     // except for the ones that make the content appear under the system bars.
     fun Activity.showSystemUI() {
+
+        /*if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+
+            WindowCompat.setDecorFitsSystemWindows(window, true)
+            WindowInsetsControllerCompat(window, View(this)).show(WindowInsetsCompat.Type.systemBars())
+
+        } else {*/ /** WINDOW COMPAT IS BUGGY DUE TO FU*KED UP PLAYER AND TRAILERS **/
+        @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility =
+            (View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN) // FIXME this should be replaced
+        //}
 
-            (View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN)
-
-        changeStatusBarState(isEmulatorSettings())
-
-        // window.clearFlags(View.KEEP_SCREEN_ON)
+        changeStatusBarState(isLayout(EMULATOR))
     }
 
     fun Context.shouldShowPIPMode(isInPlayer: Boolean): Boolean {
@@ -445,7 +442,14 @@ object UIHelper {
     fun Context.hasPIPPermission(): Boolean {
         val appOps =
             getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            appOps.unsafeCheckOpNoThrow(
+                AppOpsManager.OPSTR_PICTURE_IN_PICTURE,
+                android.os.Process.myUid(),
+                packageName
+            ) == AppOpsManager.MODE_ALLOWED
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            @Suppress("DEPRECATION")
             appOps.checkOpNoThrow(
                 AppOpsManager.OPSTR_PICTURE_IN_PICTURE,
                 android.os.Process.myUid(),
@@ -478,7 +482,7 @@ object UIHelper {
     }
 
     fun Dialog?.dismissSafe() {
-        if (this?.isShowing == true) {
+        if (this?.isShowing == true && activity?.isFinishing != true) {
             this.dismiss()
         }
     }
@@ -490,7 +494,7 @@ object UIHelper {
         onMenuItemClick: MenuItem.() -> Unit,
     ): PopupMenu {
         val ctw = ContextThemeWrapper(context, R.style.PopupMenu)
-        val popup = PopupMenu(ctw, this, Gravity.NO_GRAVITY, R.attr.actionOverflowMenuStyle, 0)
+        val popup = PopupMenu(ctw, this, Gravity.NO_GRAVITY, androidx.appcompat.R.attr.actionOverflowMenuStyle, 0)
 
         items.forEach { (id, stringRes) ->
             popup.menu.add(0, id, 0, stringRes)
@@ -514,7 +518,7 @@ object UIHelper {
         onMenuItemClick: MenuItem.() -> Unit,
     ): PopupMenu {
         val ctw = ContextThemeWrapper(context, R.style.PopupMenu)
-        val popup = PopupMenu(ctw, this, Gravity.NO_GRAVITY, R.attr.actionOverflowMenuStyle, 0)
+        val popup = PopupMenu(ctw, this, Gravity.NO_GRAVITY, androidx.appcompat.R.attr.actionOverflowMenuStyle, 0)
 
         items.forEach { (id, string) ->
             popup.menu.add(0, id, 0, string)

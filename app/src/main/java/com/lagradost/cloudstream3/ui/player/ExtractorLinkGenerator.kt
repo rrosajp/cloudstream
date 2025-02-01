@@ -1,13 +1,14 @@
 package com.lagradost.cloudstream3.ui.player
 
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorUri
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 
 class ExtractorLinkGenerator(
     private val links: List<ExtractorLink>,
     private val subtitles: List<SubtitleData>,
 ) : IGenerator {
     override val hasCache = false
+    override val canSkipLoading = true
 
     override fun getCurrentId(): Int? {
         return null
@@ -37,14 +38,17 @@ class ExtractorLinkGenerator(
 
     override suspend fun generateLinks(
         clearCache: Boolean,
-        isCasting: Boolean,
+        sourceTypes: Set<ExtractorLinkType>,
         callback: (Pair<ExtractorLink?, ExtractorUri?>) -> Unit,
         subtitleCallback: (SubtitleData) -> Unit,
-        offset: Int
+        offset: Int,
+        isCasting: Boolean
     ): Boolean {
         subtitles.forEach(subtitleCallback)
         links.forEach {
-            callback.invoke(it to null)
+            if(sourceTypes.contains(it.type)) {
+                callback.invoke(it to null)
+            }
         }
 
         return true
